@@ -4,9 +4,9 @@ package pool
 
 import (
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 // Factory must returns new connections
@@ -51,14 +51,16 @@ type none struct{}
 
 // Pool contains a number of connections
 type Pool struct {
-	head    unsafe.Pointer
+	conns   []member
 	opt     Options
 	factory Factory
 
 	dying, dead chan none
 
-	avail  int32
+	avail  uint32
 	closed int32
+
+	mu sync.Mutex
 }
 
 // New creates a pool with an initial number of connection and a maximum cap
@@ -68,6 +70,7 @@ func New(opt *Options, factory Factory) (*Pool, error) {
 	}
 
 	p := &Pool{
+		conns:   make([]member, 0, opt.MaxCap),
 		factory: factory,
 		opt:     opt.norm(),
 		dying:   make(chan none),
@@ -88,7 +91,7 @@ func New(opt *Options, factory Factory) (*Pool, error) {
 }
 
 // Len returns the number of available connections in the pool
-func (s *Pool) Len() int { return int(atomic.LoadInt32(&s.avail)) }
+func (s *Pool) Len() int { return int(atomic.LoadUint32(&s.avail)) }
 
 // Get returns a connection from the pool or creates a new one
 func (s *Pool) Get() (net.Conn, error) {
@@ -106,17 +109,13 @@ func (s *Pool) Put(cn net.Conn) bool {
 		return false
 	}
 
-	m := &poolMember{
-		Conn:       cn,
-		lastAccess: time.Now(),
-	}
-	for {
-		m.next = atomic.LoadPointer(&s.head)
-		if atomic.CompareAndSwapPointer(&s.head, m.next, unsafe.Pointer(m)) {
-			atomic.AddInt32(&s.avail, 1)
-			return true
-		}
-	}
+	m := member{cn: cn, lastAccess: time.Now()}
+	s.mu.Lock()
+	s.conns = append(s.conns, m)
+	atomic.StoreUint32(&s.avail, uint32(len(s.conns)))
+	s.mu.Unlock()
+
+	return true
 }
 
 // Close closes all connections and the pool
@@ -131,16 +130,21 @@ func (s *Pool) Close() error {
 }
 
 func (s *Pool) pop() net.Conn {
-	for {
-		head := atomic.LoadPointer(&s.head)
-		if head == nil {
-			return nil
-		}
-		if atomic.CompareAndSwapPointer(&s.head, head, (*poolMember)(head).next) {
-			atomic.AddInt32(&s.avail, -1)
-			return (*poolMember)(head).Conn
-		}
+	s.mu.Lock()
+
+	pos := len(s.conns) - 1
+	if pos < 0 {
+		s.mu.Unlock()
+		return nil
 	}
+
+	m := s.conns[pos]
+	s.conns = s.conns[:pos]
+	atomic.StoreUint32(&s.avail, uint32(len(s.conns)))
+	s.mu.Unlock()
+
+	return m.cn
+
 }
 
 func (s *Pool) close() (err error) {
@@ -161,6 +165,20 @@ func (s *Pool) reap() {
 	if timeout <= 0 {
 		return
 	}
+
+	cutoff := time.Now().Add(-timeout)
+
+	s.mu.Lock()
+	if sz := len(s.conns); sz != 0 {
+		if m := s.conns[0]; m.lastAccess.Before(cutoff) {
+			defer m.cn.Close()
+
+			copy(s.conns, s.conns[1:])
+			s.conns = s.conns[:sz-1]
+			atomic.StoreUint32(&s.avail, uint32(len(s.conns)))
+		}
+	}
+	s.mu.Unlock()
 }
 
 func (s *Pool) loop() {
@@ -179,8 +197,7 @@ func (s *Pool) loop() {
 	}
 }
 
-type poolMember struct {
-	net.Conn
-	next       unsafe.Pointer
+type member struct {
+	cn         net.Conn
 	lastAccess time.Time
 }

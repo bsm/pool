@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsm/pool"
 	. "github.com/onsi/ginkgo"
@@ -44,17 +45,22 @@ var _ = Describe("Pool", func() {
 		cn1, err := subject.Get()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(subject.Len()).To(Equal(2))
+
 		cn2, err := subject.Get()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(subject.Len()).To(Equal(1))
+
 		cn3, err := subject.Get()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(subject.Len()).To(Equal(0))
+
 		cn4, err := subject.Get()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(subject.Len()).To(Equal(0))
+
 		cn5, err := subject.Get()
 		Expect(err).NotTo(HaveOccurred())
+
 		cn6, err := subject.Get()
 		Expect(err).NotTo(HaveOccurred())
 
@@ -63,8 +69,10 @@ var _ = Describe("Pool", func() {
 		Expect(subject.Put(cn3)).To(BeTrue())
 		Expect(subject.Put(cn4)).To(BeTrue())
 		Expect(subject.Len()).To(Equal(4))
+
 		Expect(subject.Put(cn5)).To(BeTrue())
 		Expect(subject.Len()).To(Equal(5))
+
 		Expect(subject.Put(cn6)).To(BeFalse())
 		Expect(subject.Len()).To(Equal(5))
 
@@ -74,6 +82,7 @@ var _ = Describe("Pool", func() {
 
 		last, err := subject.Get()
 		Expect(err).NotTo(HaveOccurred())
+		Expect(last).NotTo(BeNil())
 		Expect(last).NotTo(Equal(cn1))
 		Expect(last).NotTo(Equal(cn2))
 		Expect(last).NotTo(Equal(cn3))
@@ -105,6 +114,31 @@ var _ = Describe("Pool", func() {
 		wg.Wait()
 
 		Expect(subject.Len()).To(Equal(5))
+	})
+
+	It("should reap idle connections", func() {
+		p, err := pool.New(&pool.Options{
+			InitialSize:  3,
+			MaxCap:       5,
+			ReapInterval: 200 * time.Millisecond,
+			IdleTimeout:  300 * time.Millisecond,
+		}, factory)
+		Expect(err).NotTo(HaveOccurred())
+		defer p.Close()
+
+		Expect(p.Len()).To(Equal(3))
+		Eventually(func() (int, error) {
+			cn, err := p.Get()
+			if err != nil {
+				return 0, err
+			}
+			if err != nil {
+				return 0, err
+			}
+
+			p.Put(cn)
+			return p.Len(), nil
+		}).Should(Equal(1))
 	})
 
 })
