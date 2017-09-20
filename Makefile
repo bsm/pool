@@ -1,20 +1,18 @@
-PKGS=./...
-
 default: vet test
 
 vet:
-	go vet ${PKGS}
+	go vet .
 
 test:
-	go test ${PKGS}
+	go test .
 
 test-race:
-	go test -race ${PKGS}
+	go test -race .
 
 bench:
-	go test ${PKGS} -run=NONE -bench=. -benchmem
+	go test . -run=NONE -bench=. -benchmem
 
 bench-race:
-	go test ${PKGS} -run=NONE -bench=. -benchmem -race
+	go test . -run=NONE -bench=. -benchmem -race
 
 .PHONY: default vet test
