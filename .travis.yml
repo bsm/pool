@@ -1,9 +1,7 @@
 language: go
-install:
-  - go get -u github.com/golang/dep/cmd/dep
-  - dep ensure -v -vendor-only
 script:
   - make test test-race bench bench-race
 go:
-  - 1.9
-  - 1.8.3
+  - 1.11.x
+env:
+  - GO111MODULE=on
